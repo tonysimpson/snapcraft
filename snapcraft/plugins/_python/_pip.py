@@ -98,6 +98,12 @@ def _fix_permissions(path):
             _replicate_owner_mode(os.path.join(root, dirname))
 
 
+def _expand_vars(text, project_dir):
+    text = text.replace('$SNAPCRAFT_PROJECT_DIR', project_dir)
+    text = text.replace('${SNAPCRAFT_PROJECT_DIR}', project_dir)
+    return text
+
+
 class Pip:
     """Wrapper for pip abstracting the args necessary for use in a part.
 
@@ -109,7 +115,7 @@ class Pip:
     before they can be installed or have wheels built.
     """
 
-    def __init__(self, *, python_major_version, part_dir, install_dir, stage_dir):
+    def __init__(self, *, python_major_version, part_dir, install_dir, stage_dir, project_dir):
         """Initialize pip.
 
         You must call setup() before you can actually use pip.
@@ -119,6 +125,7 @@ class Pip:
         :param str part_dir: Path to the part's working area
         :param str install_dir: Path to the part's install area
         :param str stage_dir: Path to the staging area
+        :param str project_dir: Path to the project area
 
         :raises MissingPythonCommandError: If no python could be found in the
                                            staging or part's install area.
@@ -126,6 +133,7 @@ class Pip:
         self._python_major_version = python_major_version
         self._install_dir = install_dir
         self._stage_dir = stage_dir
+        self._project_dir = project_dir
 
         self._python_package_dir = os.path.join(part_dir, "python-packages")
         os.makedirs(self._python_package_dir, exist_ok=True)
@@ -155,16 +163,29 @@ class Pip:
             )
         return self.__python_home
 
-    def setup(self):
+    def setup(
+        self,
+        no_index: bool = False,
+        find_links: Optional[Sequence[str]] = None
+    ):
         """Install pip and dependencies.
 
         Check to see if pip has already been installed. If not, fetch pip,
         setuptools, and wheel, and install them so they can be used.
         """
 
-        self._ensure_pip_installed()
-        self._ensure_wheel_installed()
-        self._ensure_setuptools_installed()
+        self._ensure_pip_installed(
+            no_index=no_index,
+            find_links=find_links
+        )
+        self._ensure_wheel_installed(
+            no_index=no_index,
+            find_links=find_links
+        )
+        self._ensure_setuptools_installed(
+            no_index=no_index,
+            find_links=find_links
+        )
 
     def is_setup(self):
         """Return true if this class has already been setup."""
@@ -175,7 +196,11 @@ class Pip:
             and self._is_setuptools_installed()
         )
 
-    def _ensure_pip_installed(self):
+    def _ensure_pip_installed(
+        self,
+        no_index: bool = False,
+        find_links: Optional[Sequence[str]] = None
+    ):
         # Check to see if we have our own pip. If not, we need to use the pip
         # on the host (installed via build-packages) to grab our own.
         if not self._is_pip_installed():
@@ -190,22 +215,42 @@ class Pip:
                 self.__python_home = os.path.join(os.path.sep, "usr")
 
                 # Using the host's pip, install our own pip
-                self.download({"pip"})
+                self.download(
+                    {"pip"},
+                    no_index=no_index,
+                    find_links=find_links
+                )
                 self.install({"pip"}, ignore_installed=True)
             finally:
                 # Now that we have our own pip, reset the python home
                 self.__python_home = real_python_home
 
-    def _ensure_wheel_installed(self):
+    def _ensure_wheel_installed(
+        self,
+        no_index: bool = False,
+        find_links: Optional[Sequence[str]] = None
+    ):
         if not self._is_wheel_installed():
             logger.info("Fetching and installing wheel...")
-            self.download({"wheel"})
+            self.download(
+                {"wheel"},
+                no_index=no_index,
+                find_links=find_links
+            )
             self.install({"wheel"}, ignore_installed=True)
 
-    def _ensure_setuptools_installed(self):
+    def _ensure_setuptools_installed(
+        self,
+        no_index: bool = False,
+        find_links: Optional[Sequence[str]] = None
+    ):
         if not self._is_setuptools_installed():
             logger.info("Fetching and installing setuptools...")
-            self.download({"setuptools"})
+            self.download(
+                {"setuptools"},
+                no_index=no_index,
+                find_links=find_links
+            )
             self.install({"setuptools"}, ignore_installed=True)
 
     def _is_pip_installed(self):
@@ -240,7 +285,9 @@ class Pip:
         setup_py_dir: Optional[str] = None,
         constraints: Optional[Set[str]] = None,
         requirements: Optional[Sequence[str]] = None,
-        process_dependency_links: bool = False
+        process_dependency_links: bool = False,
+        no_index: bool = False,
+        find_links: Optional[Sequence[str]] = None
     ):
         """Download packages into cache, but do not install them.
 
@@ -251,6 +298,8 @@ class Pip:
                                       files.
         :param boolean process_dependency_links: Enable the processing of
                                                  dependency links.
+        :param boolean no_index: Don't hit PyPI
+        :param iterable find_links: Locations of additional repositories
         """
         package_args = _process_package_args(
             packages=packages, requirements=requirements, setup_py_dir=setup_py_dir
@@ -262,6 +311,12 @@ class Pip:
         args = _process_common_args(
             process_dependency_links=process_dependency_links, constraints=constraints
         )
+        if no_index:
+            args.append('--no-index')
+        if find_links:
+            for fl_item in find_links:
+                args.append('--find-links')
+                args.append(_expand_vars(fl_item, self._project_dir))
 
         # Using pip with a few special parameters:
         #
@@ -516,7 +571,6 @@ class Pip:
         # common.run.
         if runner is None:
             runner = snapcraft.internal.common.run
-
         return runner(
             [self._python_command, "-m", "pip"] + list(args), env=env, **kwargs
         )

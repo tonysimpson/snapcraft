@@ -122,6 +122,15 @@ class PythonPlugin(snapcraft.BasePlugin):
             "default": "python3",
             "enum": ["python2", "python3"],
         }
+        schema["properties"]["pip-no-index"] = {
+            "type": "boolean",
+            "default": False,
+        }
+        schema["properties"]["pip-find-links"] = {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+        } 
         schema["anyOf"] = [{"required": ["source"]}, {"required": ["python-packages"]}]
 
         return schema
@@ -136,6 +145,8 @@ class PythonPlugin(snapcraft.BasePlugin):
             "python-packages",
             "process-dependency-links",
             "python-version",
+            "pip-no-index",
+            "pip-find-links",
         ]
 
     @property
@@ -177,6 +188,7 @@ class PythonPlugin(snapcraft.BasePlugin):
                 part_dir=self.partdir,
                 install_dir=self.installdir,
                 stage_dir=self.project.stage_dir,
+                project_dir=self.project._project_dir,
             )
         return self.__pip
 
@@ -225,7 +237,10 @@ class PythonPlugin(snapcraft.BasePlugin):
     def pull(self):
         super().pull()
 
-        self._pip.setup()
+        self._pip.setup(
+            no_index=self.options.pip_no_index,
+            find_links=self.options.pip_find_links
+        )
 
         with simple_env_bzr(os.path.join(self.installdir, "bin")):
             # Download this project, using its setup.py if present. This will
@@ -316,7 +331,6 @@ class PythonPlugin(snapcraft.BasePlugin):
     def _install_wheels(self, wheels):
         installed = self._pip.list()
         wheel_names = [os.path.basename(w).split("-")[0] for w in wheels]
-
         # we want to avoid installing what is already provided in
         # stage-packages
         need_install = [k for k in wheel_names if k not in installed]
@@ -335,12 +349,15 @@ class PythonPlugin(snapcraft.BasePlugin):
             "requirements", self.options.requirements
         )
 
+
         self._pip.download(
             self.options.python_packages,
             setup_py_dir=None,
             constraints=constraints,
             requirements=requirements,
             process_dependency_links=self.options.process_dependency_links,
+            no_index=self.options.pip_no_index,
+            find_links=self.options.pip_find_links,
         )
 
     def _install_project(self):
@@ -372,6 +389,8 @@ class PythonPlugin(snapcraft.BasePlugin):
                 constraints=constraints,
                 requirements=set(),
                 process_dependency_links=self.options.process_dependency_links,
+                no_index=self.options.pip_no_index,
+                find_links=self.options.pip_find_links,
             )
             wheels = self._pip.wheel(
                 [],
